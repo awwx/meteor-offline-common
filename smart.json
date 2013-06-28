@@ -1,0 +1,21 @@
+{
+  "name": "offline-common",
+
+  "description": "Internal package used by offline-data",
+
+  "homepage": "https://github.com/awwx/meteor-offline-common#readme",
+
+  "author": "Andrew Wilcox",
+
+  "version": "0.0.4",
+
+  "git": "https://github.com/awwx/meteor-offline-common.git",
+
+  "packages": {
+    "browser-msg": "0.0.2",
+    "canonical-stringify": {
+      "git": "https://github.com/awwx/meteor-canonical-stringify.git",
+      "tag": "v1.0"
+    }
+  }
+}
