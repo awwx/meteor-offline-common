@@ -13,7 +13,6 @@
 
 
     Offline._messageAgent = (topic, args...) ->
-      Meteor._debug 'messaging agent', topic, args
       if Offline._usingSharedWebWorker
         Offline._sharedWebWorker.post {msg: topic, args}
       else if Offline._windows.currentlyTheAgent()
@@ -25,10 +24,7 @@
 
     if @Agent?
 
-      Meteor._debug 'agent'
-
       Agent.addMessageHandler 'update', (sourcePort, data) ->
-        Meteor._debug 'update from client'
         for port in Agent.ports
           unless port is sourcePort
             port.postMessage({msg: 'update'})
@@ -537,7 +533,6 @@ TODO can we batch updates into one transaction?
       if @Agent?
         initializeAgent()
       else
-        Meteor._debug 'nowAgent listen'
         nowAgent.listen initializeAgent
 
       return
