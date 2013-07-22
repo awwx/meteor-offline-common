@@ -10,10 +10,13 @@
 
     unless @Agent?
       {nowAgent, thisWindowId} = Offline._windows
+    {windowsAreDead} = Offline._windows
 
 
     Offline._messageAgent = (topic, args...) ->
-      if Offline._usingSharedWebWorker
+      if @Agent?
+        throw new Error("oops, messaging agent from agent");
+      else if Offline._usingSharedWebWorker
         Offline._sharedWebWorker.post {msg: topic, args}
       else if Offline._windows.currentlyTheAgent()
         defer -> handlers[topic]?(args...)
@@ -183,6 +186,10 @@ serialized subscription -> Meteor subscription handle
 
         @_deletedRemovedDocs = false
 
+
+TODO this is wrong: this only deletes documents for collections that
+we've already seen.
+
       deleteRemovedDocuments: (tx) ->
         if @_deletedRemovedDocs
           return Result.completed()
@@ -288,7 +295,7 @@ serialized subscription -> Meteor subscription handle
         subscriptions = _.map(subscriptions, justNameAndArgs)
         @stopOldSubscriptions(subscriptions)
         @startNewSubscriptions(subscriptions)
-        return Result.completed()
+        return
 
 
       checkIfDocumentNowFree: (tx, collectionName, docId) ->
@@ -367,19 +374,17 @@ serialized subscription -> Meteor subscription handle
 TODO rename
 
     subscribeToNewSubscriptions = (subscriptions) ->
-
       for subscription in subscriptions
         connectionAgentFor subscription.connection
 
-      results = []
       for connectionName, connectionAgent of connectionAgents
         connectionSubscriptions =
           _.filter(
             subscriptions,
             (subscription) -> subscription.connection is connectionName
           )
-        results.push connectionAgent.updateSubscriptions(connectionSubscriptions)
-      return Result.join(results)
+        connectionAgent.updateSubscriptions(connectionSubscriptions)
+      return
 
 
     class CollectionAgent
@@ -454,7 +459,7 @@ collection which are no longer present on the server.
           (if doc?
             database.writeDoc tx, @connectionName, @collectionName, doc
           else
-            database.deleteDoc tx, @connectionname, @collectionName, docId
+            database.deleteDoc tx, @connectionName, @collectionName, docId
           )
           .then(=>
             @addDocumentUpdate(tx, docId, doc)
@@ -508,9 +513,32 @@ TODO can we batch updates into one transaction?
       return
 
 
+    initialized = new Result()
+
     initializeAgent = ->
-      updateSubscriptions()
       sendQueuedMethods()
+      .then(-> initialized.complete())
+
+    windowsAreDead.listen (deadWindowIds) ->
+      initialized.then(->
+        asAgentWindow((tx) ->
+          database.deleteWindows(tx, deadWindowIds)
+          .then(->
+            database.cleanSubscriptions(tx)
+          )
+          .then(->
+            database.readMergedSubscriptions(tx)
+          )
+          .then((subscriptions) ->
+            subscribeToNewSubscriptions(subscriptions)
+          )
+          .then(->
+            updateSubscriptionsReadyInTx(tx)
+          )
+        )
+        return
+      )
+      return
 
 
     Meteor.startup ->
@@ -524,11 +552,6 @@ TODO can we batch updates into one transaction?
       addMessageHandler 'newQueuedMethod', ->
         sendQueuedMethods()
         return
-
-      unless @Agent?
-        broadcast.listen 'deadWindows', ->
-          subscriptionsUpdated()
-          return
 
       if @Agent?
         initializeAgent()

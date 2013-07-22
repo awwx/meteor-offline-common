@@ -298,11 +298,13 @@ TODO do any browsers pay attention to the size argument?
           )
 
 
-      readWindowIds: (tx) ->
-        begin "readWindowsIds",
+      readAllWindowIds: (tx) ->
+        begin "readKnownWindowIds",
           (=> @sql(tx,
             """
-              SELECT windowId FROM windows
+              SELECT windowId FROM windows UNION
+              SELECT windowId FROM windowSubscriptions UNION
+              SELECT windowId FROM agentWindow
             """
           )),
           ((rows) ->
@@ -322,6 +324,13 @@ TODO do any browsers pay attention to the size argument?
           (=> @sql(tx,
             """
               DELETE FROM windowSubscriptions
+                WHERE windowId IN (#{placeholders(windowIds)})
+            """,
+            windowIds
+          )),
+          (=> @sql(tx,
+            """
+              DELETE FROM agentWindow
                 WHERE windowId IN (#{placeholders(windowIds)})
             """,
             windowIds
