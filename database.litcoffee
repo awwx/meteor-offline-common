@@ -8,7 +8,7 @@ in a shared web worker.
     global = this
 
 
-    {canonicalStringify, contains, Result} = awwx
+    {contains, Result} = awwx
     {getContext, getResponsible, withContext} = awwx.Context
     {bind, reportError} = awwx.Error
 

@@ -2,7 +2,6 @@
     {withContext} = awwx.Context
     broadcast = Offline._broadcast
     {defer} = awwx.Error
-    serialize = awwx.canonicalStringify
     database = Offline._database
 
     Offline._test or= {}
@@ -204,7 +203,7 @@ we've already seen.
           @deleteRemovedDocuments(tx)
 
       _alreadyHaveMeteorSubscription: (subscription) ->
-        !! @meteorSubscriptionHandles[serialize(subscription)]
+        !! @meteorSubscriptionHandles[canonicalStringify(subscription)]
 
       allMeteorSubscriptionsReady: ->
         @_nMeteorSubscriptionsReady is _.size(@meteorSubscriptionHandles)
@@ -266,7 +265,7 @@ we've already seen.
 
       stopOldSubscriptions: (subscriptions) ->
         for subscription in @oldSubscriptions(subscriptions)
-          serialized = serialize(subscription)
+          serialized = canonicalStringify(subscription)
           @meteorSubscriptionHandles[serialized].stop()
           delete @meteorSubscriptionHandles[serialized]
         return
@@ -277,7 +276,7 @@ we've already seen.
         handle = Meteor.subscribe name, args..., =>
           @meteorSubscriptionReady(subscription)
           return
-        @meteorSubscriptionHandles[serialize(subscription)] = handle
+        @meteorSubscriptionHandles[canonicalStringify(subscription)] = handle
         return
 
       newSubscriptions: (subscriptions) ->
