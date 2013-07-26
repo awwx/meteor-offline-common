@@ -34,6 +34,11 @@ it's safe to clear out old subscriptions?  For now always call
       testingWindows = {}
 
 
+      Agent.addMessageHandler 'goodbye', (port, data) ->
+        deadWindows([data.windowId])
+        return
+
+
       Agent.addMessageHandler 'pong', (port, data) ->
         delete testingWindows?[data.windowId]
         return
@@ -78,23 +83,7 @@ it's safe to clear out old subscriptions?  For now always call
       Offline._windows.thisWindowId = thisWindowId = Random.id()
 
       Offline._windows.nowAgent = nowAgent = new Fanout()
-      Offline._windows.noLongerAgent = noLongerAgent = new Fanout()
-
       # nowAgent.listen -> Meteor._debug "now the agent"
-      # noLongerAgent.listen -> Meteor._debug "no longer the agent"
-
-TODO not used yet
-
-      unload = ->
-        withContext "unload", ->
-          broadcast 'goodbye', thisWindowId
-          return
-
-
-TODO old IE?  But will we even be loading this code in a browser that
-doesn't have a supported database...?
-
-      window.addEventListener('unload', unload, false)
 
 
       testingWindows = null
@@ -128,22 +117,34 @@ doesn't have a supported database...?
           currentlyTheAgent = true
           defer -> nowAgent()
           db.writeAgentWindow(tx, thisWindowId)
-          .then(->
-            broadcast 'newAgent', thisWindowId
-            return
+
+
+On startup, if there isn't an agentWindow in the database or if the
+agent window is marked as closed in local storage, we can become the
+agent window right away.
+
+      startupCheck = ->
+        withContext "startupCheck", ->
+          db.transaction((tx) ->
+            db.readAgentWindow(tx)
+            .then((agentWindowId) ->
+              if not agentWindowId?
+                becomeTheAgentWindow(tx)
+              else
+                closedAgentWindow = localStorage.getItem(
+                  '/awwx/offline-data/agentWindowClosed'
+                )
+                if closedAgentWindow is agentWindowId
+                  becomeTheAgentWindow(tx)
+            )
+            .then(->
+              localStorage.removeItem(
+                '/awwx/offline-data/agentWindowClosed'
+              )
+              return
+            )
           )
 
-
-      notTheAgent = ->
-        withContext "notTheAgent", ->
-          return unless currentlyTheAgent
-          currentlyTheAgent = false
-          noLongerAgent()
-          return
-
-
-TODO if no one is the agent tab, we could become the agent
-tab immediately.
 
       check = ->
         withContext "window check", ->
@@ -195,17 +196,42 @@ tab immediately.
                   delete testingWindows[windowId]
                 return
 
-            broadcast.listen 'newAgent', (windowId) ->
-              withContext "listen newAgent", ->
-                if windowId isnt thisWindowId
-                  notTheAgent()
-                return
+            broadcast.listen 'goodbye', (windowId) ->
+              deadWindows([windowId])
 
             db.transaction((tx) ->
               db.ensureWindow(tx, thisWindowId)
+            )
+            .then(->
+              startupCheck()
             )
             .then(->
               check()
               Meteor.setInterval check, 10000
             )
             return
+
+
+When a window is closing and gets an unload event, it doesn't survive
+long enough to write anything to the database (it gets no more ticks
+of the event loop).  But we are able to write to local storage.
+
+      unload = ->
+        withContext "unload", ->
+          if Offline._usingSharedWebWorker
+            Offline._sharedWebWorker.post {
+              msg: 'goodbye',
+              windowId: thisWindowId
+            }
+          else
+            if currentlyTheAgent
+              localStorage.setItem(
+                '/awwx/offline-data/agentWindowClosed',
+                thisWindowId
+              )
+            broadcast 'goodbye', thisWindowId
+          return
+
+
+      if window.addEventListener?
+        window.addEventListener('unload', unload, false)
