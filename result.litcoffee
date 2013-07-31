@@ -162,6 +162,14 @@ TODO clear timeout if result finishes before the timeout
                   finalResult.complete(output)
         return finalResult
 
+      @map: (array, fn) ->
+        results = []
+        for item in array
+          result = new Result
+          result._run(fn, item)
+          results.push result
+        return Result.join(results)
+
       @sequence: (input, fns) ->
         finalResult = new Result()
         i = 0
@@ -193,11 +201,6 @@ TODO clear timeout if result finishes before the timeout
         delay.onSuccess -> result.fail('timeout')
         this.into(result)
         return result
-
-      # done: ->
-      #   result = new Result()
-      #   @callback -> result.complete()
-      #   return result
 
       debug: (msg = "result") ->
         @callback (failure, value) ->

@@ -26,7 +26,7 @@ Package.on_use(function (api) {
     'contains.litcoffee',
     'database.litcoffee',
     'windows.litcoffee',
-    'agent.litcoffee',
+    'agent.litcoffee'
   ], 'client');
 });
 

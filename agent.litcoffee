@@ -1,3 +1,5 @@
+    return unless Offline.supported
+
     {contains, Result} = awwx
     {withContext} = awwx.Context
     broadcast = Offline._broadcast
@@ -60,67 +62,68 @@
         return
 
 
-    updateSubscriptionsReadyInTx = (tx) ->
-      withContext "updateSubscriptionsReadyInTx", ->
+    addUpdate = (tx, trackUpdate, update) ->
+      trackUpdate.madeUpdate = true if trackUpdate?
+      database.addUpdate(tx, update)
+
+
+    broadcastStatusOfSubscription = (tx, trackUpdate, subscription) ->
+      status = {
+        status: subscription.status
+        loaded: subscription.loaded
+      }
+      status.error = subscription.error if subscription.error?
+      addUpdate tx, trackUpdate, {
+        update: 'subscriptionStatus'
+        subscription: {
+          connection: subscription.connection
+          name: subscription.name
+          args: subscription.args
+        }
+        status
+      }
+
+
+    broadcastSubscriptionStatus = (tx, trackUpdate, connection, name, args) ->
+      database.readSubscription(tx, connection, name, args)
+      .then((subscription) =>
+        broadcastStatusOfSubscription(tx, trackUpdate, subscription)
+      )
+
+
+A subscription is ready when we have received a DDP "ready" message
+from the server *and* there are no outstanding method calls that
+were made after the subscription was started.
+
+A subscription becomes loaded when it is ready, and stays loaded until
+the subscription is unsubscribed or has an error.
+
+    updateSubscriptionsReady = (tx, trackUpdate) ->
+      withContext "updateSubscriptionsReady", ->
         Result.join([
           database.readSubscriptions(tx)
           database.readSubscriptionsHeldUp(tx)
         ])
         .then(([subscriptions, subscriptionsHeldUp]) ->
           newlyReady = []
-          for {connection, name, args, readyFromServer, ready} in subscriptions
-            if (not ready and
-                readyFromServer and
+          for {connection, name, args, serverReady, status} in subscriptions
+            if (serverReady and
+                status is 'subscribing' and
                 not contains(subscriptionsHeldUp, {connection, name, args}))
               newlyReady.push {connection, name, args}
-          if newlyReady.length is 0
-            return false
-          writes = []
-          for {connection, name, args} in newlyReady
-            writes.push database.setSubscriptionReady(tx, connection, name, args)
-            writes.push database.addUpdate(tx, {
-              update: 'subscriptionReady',
-              subscription: {connection, name, args}
-            })
-          Result.join(writes)
-        )
-        .then(-> return true)
-
-
-    Offline._test.updateSubscriptionsReadyInTx = updateSubscriptionsReadyInTx
-
-
-TODO what we really want here for broadcasting updates is to have an
-"after transaction" callback that would broadcast an update iff an
-update was added to the database during the transaction.
-
-    updateSubscriptionsReady = ->
-      withContext "updateSubscriptionsReady", ->
-        database.transaction((tx) ->
-          updateSubscriptionsReadyInTx(tx)
-        )
-        .then((someNewlyReady) ->
-          if someNewlyReady
-            broadcastUpdate()
-          return
-        )
-
-
-    addNewSubscriptionToDatabase = (tx, connection, name, args) ->
-      withContext "addNewSubscriptionToDatabase", ->
-        database.readMethodsWithDocsWritten(tx, connection)
-        .then((methodIds) ->
-          database.addSubscriptionWaitingOnMethods(
-            tx,
-            connection,
-            name,
-            args,
-            methodIds
+          Result.map(
+            newlyReady,
+            (({connection, name, args}) ->
+              database.setSubscriptionReady(tx, connection, name, args)
+              .then(->
+                broadcastSubscriptionStatus(tx, trackUpdate, connection, name, args)
+              )
+            )
           )
         )
-        .then(->
-          database.ensureSubscription(tx, connection, name, args)
-        )
+
+
+    Offline._test.updateSubscriptionsReady = updateSubscriptionsReady
 
 
     justNameAndArgs = (subscription) ->
@@ -130,6 +133,10 @@ update was added to the database during the transaction.
 If we're running in the shared web worker, we're always the
 agent. Otherwise, running in a browser window, we need to check if
 we're still the agent in the transaction.
+
+TODO because we're no longer passing the agent role from window to
+window, once this window becomes the agent it stays the agent for as
+long as it's alive.
 
     if @Agent?
 
@@ -198,21 +205,26 @@ we've already seen.
             collectionAgent.deleteDocumentsGoneFromServer(tx)
           )
 
+
       checkIfReadyToDeleteDocs: (tx) ->
         if @allMeteorSubscriptionsReady()
           @deleteRemovedDocuments(tx)
 
+
       _alreadyHaveMeteorSubscription: (subscription) ->
         !! @meteorSubscriptionHandles[canonicalStringify(subscription)]
 
+
       allMeteorSubscriptionsReady: ->
         @_nMeteorSubscriptionsReady is _.size(@meteorSubscriptionHandles)
+
 
       _eachCollectionAgent: (fn) ->
         results = []
         for name, collectionAgent of @collectionAgents
           results.push fn(collectionAgent)
         return Result.join(results)
+
 
       instantiateCollectionAgent: (collectionName) ->
         @collectionAgents[collectionName] or=
@@ -222,6 +234,7 @@ we've already seen.
             new Meteor.Collection(collectionName)
           )
         return
+
 
       instantiateCollectionAgents: (collectionNames) ->
         for collectionName in collectionNames
@@ -234,17 +247,19 @@ we've already seen.
           @meteorConnection._updatesForUnknownStores
         ))
         asAgentWindow (tx) =>
-          # processUpdatesInTx(tx)
-          # .then(->
-          database.setSubscriptionReadyFromServer(
+          database.setSubscriptionServerReady(
             tx,
             @connectionName,
-            subscription.name
-            subscription.args
+            subscription.name,
+            subscription.args,
           )
-          # )
-          .then(->
-            updateSubscriptionsReadyInTx(tx)
+          .then(=>
+            broadcastSubscriptionStatus(
+              tx, null, @connectionName, subscription.name, subscription.args
+            )
+          )
+          .then(=>
+            updateSubscriptionsReady(tx, null)
           )
           .then(=>
             ++@_nMeteorSubscriptionsReady
@@ -254,8 +269,10 @@ we've already seen.
             broadcastUpdate()
           )
 
+
       currentSubscriptions: ->
         _.map(_.keys(@meteorSubscriptionHandles), EJSON.parse)
+
 
       oldSubscriptions: (subscriptions) ->
         _.reject(
@@ -263,21 +280,6 @@ we've already seen.
           ((subscription) => contains(subscriptions, subscription))
         )
 
-      stopOldSubscriptions: (subscriptions) ->
-        for subscription in @oldSubscriptions(subscriptions)
-          serialized = canonicalStringify(subscription)
-          @meteorSubscriptionHandles[serialized].stop()
-          delete @meteorSubscriptionHandles[serialized]
-        return
-
-      startNewSubscription: (subscription) ->
-        @_deletedRemovedDocs = false
-        {name, args} = subscription
-        handle = Meteor.subscribe name, args..., =>
-          @meteorSubscriptionReady(subscription)
-          return
-        @meteorSubscriptionHandles[canonicalStringify(subscription)] = handle
-        return
 
       newSubscriptions: (subscriptions) ->
         _.reject(
@@ -285,16 +287,109 @@ we've already seen.
           (subscription) => @_alreadyHaveMeteorSubscription(subscription)
         )
 
-      startNewSubscriptions: (subscriptions) ->
-        for subscription in @newSubscriptions(subscriptions)
-          @startNewSubscription(subscription)
+
+      stopOldSubscriptions: (tx, trackUpdate, subscriptions) ->
+        writes = []
+        for subscription in @oldSubscriptions(subscriptions)
+          serialized = canonicalStringify(subscription)
+          @meteorSubscriptionHandles[serialized].stop()
+          delete @meteorSubscriptionHandles[serialized]
+          trackUpdate.madeUpdate = true
+          writes.push(
+            database.addUpdate(tx, {
+              update: 'subscriptionStatus'
+              subscription: {
+                connection: @connectionName
+                name: subscription.name
+                args: subscription.args
+              }
+              status: {
+                status: 'unsubscribed'
+                loaded: false
+              }
+            })
+          )
+        return Result.join(writes)
+
+
+      subscriptionError: (subscription, error) ->
+        database.transaction((tx) =>
+          database.setSubscriptionError(
+            tx,
+            @connectionName,
+            subscription.name,
+            subscription.args,
+            error
+          )
+          .then(=>
+            broadcastSubscriptionStatus(
+              tx,
+              null,
+              @connectionName,
+              subscription.name,
+              subscription.args
+            )
+          )
+        )
+        .then(=>
+          broadcastUpdate()
+        )
         return
 
-      updateSubscriptions: (subscriptions) ->
-        subscriptions = _.map(subscriptions, justNameAndArgs)
-        @stopOldSubscriptions(subscriptions)
-        @startNewSubscriptions(subscriptions)
+
+      startNewSubscription: (subscription) ->
+        @_deletedRemovedDocs = false
+        {name, args} = subscription
+        handle = Meteor.subscribe name, args...,
+          onError: (err) =>
+            @subscriptionError subscription, err
+            return
+          onReady: =>
+            @meteorSubscriptionReady(subscription)
+            return
+        @meteorSubscriptionHandles[canonicalStringify(subscription)] = handle
         return
+
+
+      startNewSubscriptions: (tx, trackUpdate, subscriptions) ->
+        Result.map(
+          @newSubscriptions(subscriptions),
+          ((subscription) =>
+            @startNewSubscription(subscription)
+            database.ensureSubscription(
+              tx,
+              @connectionName,
+              subscription.name,
+              subscription.args
+            )
+            .then(=>
+              database.setSubscriptionStatus(
+                tx,
+                @connectionName,
+                subscription.name,
+                subscription.args,
+                'subscribing'
+              )
+            )
+            .then(=>
+              broadcastSubscriptionStatus(
+                tx,
+                trackUpdate,
+                @connectionName,
+                subscription.name,
+                subscription.args
+              )
+            )
+          )
+        )
+
+
+      subscribeToSubscriptions: (tx, trackUpdate, subscriptions) ->
+        subscriptions = _.map(subscriptions, justNameAndArgs)
+        return Result.join([
+          @stopOldSubscriptions(tx, trackUpdate, subscriptions)
+          @startNewSubscriptions(tx, trackUpdate, subscriptions)
+        ])
 
 
       checkIfDocumentNowFree: (tx, collectionName, docId) ->
@@ -328,7 +423,7 @@ we've already seen.
             database.removeMethodHoldingUpSubscriptions(tx, methodId)
           )
           .then(->
-            updateSubscriptionsReadyInTx(tx)
+            updateSubscriptionsReady(tx, null)
           )
         )
         .then(->
@@ -360,30 +455,47 @@ we've already seen.
       connectionAgents[connectionName] or= newConnectionAgent(connectionName)
 
 
+    sendQueuedMethodsInTx = (tx) ->
+      database.readQueuedMethods(tx)
+      .then((methods) ->
+        for {connection, methodId, name, args} in methods
+          connectionAgentFor(connection).sendQueuedMethod(methodId, name, args)
+        return
+      )
+
+
     sendQueuedMethods = ->
       asAgentWindow (tx) ->
-        database.readQueuedMethods(tx)
-        .then((methods) ->
-          for {connection, methodId, name, args} in methods
-            connectionAgentFor(connection).sendQueuedMethod(methodId, name, args)
+        sendQueuedMethodsInTx tx
+
+
+Make the subscriptions we're subscribing to (and not subscribing to)
+match what we should be subscribing to according to the database.
+
+    subscribeToSubscriptions = (tx, trackUpdate) ->
+      database.readMergedSubscriptions(tx)
+      .then((subscriptions) ->
+        for subscription in subscriptions
+          connectionAgentFor subscription.connection
+
+        writes = []
+        for connectionName, connectionAgent of connectionAgents
+          writes.push connectionAgent.subscribeToSubscriptions(
+            tx,
+            trackUpdate,
+            _.filter(
+              subscriptions,
+              (subscription) -> subscription.connection is connectionName
+            )
+          )
+        Result.join(writes)
+        .then(->
+          if trackUpdate.madeUpdate
+            broadcastUpdate()
           return
         )
-
-
-TODO rename
-
-    subscribeToNewSubscriptions = (subscriptions) ->
-      for subscription in subscriptions
-        connectionAgentFor subscription.connection
-
-      for connectionName, connectionAgent of connectionAgents
-        connectionSubscriptions =
-          _.filter(
-            subscriptions,
-            (subscription) -> subscription.connection is connectionName
-          )
-        connectionAgent.updateSubscriptions(connectionSubscriptions)
-      return
+        return
+      )
 
 
     class CollectionAgent
@@ -497,43 +609,89 @@ TODO can we batch updates into one transaction?
     #     meteorConnection._stream.rawUrl
 
 
-    updateSubscriptions = ->
-      updateSubscriptionsReady()
-      subscriptionsUpdated()
-
-
-    subscriptionsUpdated = ->
-      asAgentWindow((tx) ->
-        database.readMergedSubscriptions(tx)
+    withUpdateTracking = (fn) ->
+      trackUpdate = {madeUpdate: false}
+      database.transaction((tx) ->
+        fn(tx, trackUpdate)
       )
-      .then((subscriptions) ->
-        subscribeToNewSubscriptions(subscriptions)
+      .then(->
+        if trackUpdate.madeUpdate
+          broadcastUpdate()
+        return
+      )
+
+    windowSubscriptionsUpdated = ->
+      withUpdateTracking((tx, trackUpdate) ->
+        subscribeToSubscriptions(tx, trackUpdate)
       )
       return
 
 
     initialized = new Result()
 
+
+    cleanSubscriptions = (tx, trackUpdate) ->
+      database.cleanSubscriptions(tx)
+      .then((deletedSubscriptions) ->
+        Result.map(
+          deletedSubscriptions,
+          ((subscription) ->
+            trackUpdate.madeUpdate = true
+            database.addUpdate(tx, {
+              update: 'subscriptionStatus'
+              subscription
+              status: {
+                status: 'unsubscribed'
+                loaded: false
+              }
+            })
+          )
+        )
+      )
+
+
     initializeAgent = ->
-      sendQueuedMethods()
-      .then(-> initialized.complete())
+      withUpdateTracking((tx, trackUpdate) ->
+        cleanSubscriptions(tx, trackUpdate)
+        .then(->
+          database.initializeSubscriptions(tx)
+        )
+        .then(->
+          database.readSubscriptions(tx)
+        )
+        .then((subscriptions)->
+          Result.map(
+            subscriptions,
+            ((subscription) ->
+              broadcastStatusOfSubscription(tx, trackUpdate, subscription)
+            )
+          )
+        )
+        .then(->
+          sendQueuedMethodsInTx(tx)
+        )
+      )
+      .then(->
+        initialized.complete()
+      )
+      return
+
 
     windowsAreDead.listen (deadWindowIds) ->
       initialized.then(->
+        trackUpdate = {madeUpdate: false}
         asAgentWindow((tx) ->
           database.deleteWindows(tx, deadWindowIds)
           .then(->
-            database.cleanSubscriptions(tx)
+            cleanSubscriptions(tx, trackUpdate)
           )
           .then(->
-            database.readMergedSubscriptions(tx)
+            subscribeToSubscriptions(tx, trackUpdate)
           )
-          .then((subscriptions) ->
-            subscribeToNewSubscriptions(subscriptions)
-          )
-          .then(->
-            updateSubscriptionsReadyInTx(tx)
-          )
+        )
+        .then(->
+          if trackUpdate.madeUpdate
+            broadcastUpdate()
         )
         return
       )
@@ -544,8 +702,8 @@ TODO can we batch updates into one transaction?
 
       return if not @Agent? and Offline._usingSharedWebWorker
 
-      addMessageHandler 'subscriptionsUpdated', ->
-        updateSubscriptions()
+      addMessageHandler 'windowSubscriptionsUpdated', ->
+        windowSubscriptionsUpdated()
         return
 
       addMessageHandler 'newQueuedMethod', ->

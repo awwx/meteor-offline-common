@@ -402,11 +402,12 @@ Tinytest.addAsync "database - ensureSubscription", (test, onComplete) ->
         ((tx) -> db.readSubscriptions(tx)),
         ((subscriptions) ->
           test.equal subscriptions, [{
-            connection: '/',
-            name: 'tasks',
-            args: ['mq22'],
-            readyFromServer: false,
-            ready: false
+            connection: '/'
+            name: 'tasks'
+            args: ['mq22']
+            serverReady: false
+            status: 'subscribing'
+            loaded: false
           }]
         )
       )
@@ -441,14 +442,14 @@ Tinytest.addAsync "database - haveSubscription", (test, onComplete) ->
   )
 
 
-Tinytest.addAsync "database - setSubscriptionReadyFromServer", (test, onComplete) ->
+Tinytest.addAsync "database - setSubscriptionServerReady", (test, onComplete) ->
   beginTest().then((db) ->
     withTx(db, (tx) ->
       db.ensureSubscription(tx, '/', 'lists', [])
     )
     .then(->
       withTx(db,
-        ((tx) -> db.setSubscriptionReadyFromServer(tx, '/', 'lists', []))
+        ((tx) -> db.setSubscriptionServerReady(tx, '/', 'lists', []))
       )
     )
     .then(->
@@ -457,11 +458,12 @@ Tinytest.addAsync "database - setSubscriptionReadyFromServer", (test, onComplete
         ((subscriptions) ->
           test.equal subscriptions, [
             {
-              connection: '/',
-              name: 'lists',
-              args: [],
-              readyFromServer: true,
-              ready: false
+              connection: '/'
+              name: 'lists'
+              args: []
+              serverReady: true
+              status: 'subscribing'
+              loaded: false
             }
           ]
         )
@@ -485,15 +487,41 @@ Tinytest.addAsync "database - setSubscriptionReady", (test, onComplete) ->
       withTx(db,
         ((tx) -> db.readSubscriptions(tx)),
         ((subscriptions) ->
-          test.equal subscriptions, [
-            {
-              connection: '/',
-              name: 'lists',
-              args: [],
-              readyFromServer: false,
-              ready: true
-            }
-          ]
+          test.equal subscriptions.length, 1
+          s = subscriptions[0]
+          test.equal s.status, 'ready'
+          test.isTrue s.loaded
+        )
+      )
+    )
+    .then(-> onComplete())
+  )
+
+
+Tinytest.addAsync "database - setSubscriptionError", (test, onComplete) ->
+  beginTest().then((db) ->
+    withTx(db, (tx) ->
+      db.ensureSubscription(tx, '/', 'lists', [])
+      .then(->
+        db.setSubscriptionServerReady(tx, '/', 'lists', [])
+      )
+    )
+    .then(->
+      withTx(db,
+        ((tx) ->
+          db.setSubscriptionError(tx, '/', 'lists', [], 'foo bar'))
+      )
+    )
+    .then(->
+      withTx(db,
+        ((tx) -> db.readSubscriptions(tx)),
+        ((subscriptions) ->
+          test.equal subscriptions.length, 1
+          s = subscriptions[0]
+          test.isFalse s.serverReady
+          test.equal s.status, 'error'
+          test.equal s.error, 'foo bar'
+          test.isFalse s.loaded
         )
       )
     )
@@ -628,6 +656,27 @@ Tinytest.addAsync "database - highestUpdateId", (test, onComplete) ->
   )
 
 
+Tinytest.addAsync "database - ensureWindow", (test, onComplete) ->
+  beginTest().then((db) ->
+    withTx(db, (tx) -> db.addUpdate(tx, {update: 'one'}))
+    .then(->
+      withTx(db, (tx) -> db.addUpdate(tx, {update: 'two'}))
+    )
+    .then(->
+      withTx(db, (tx) -> db.ensureWindow(tx, 'window1'))
+    )
+    .then(->
+      withTx(db,
+        ((tx) -> db._testReadWindows(tx)),
+        ((windows) ->
+          test.equal windows, [{windowId: 'window1', updateId: 2}]
+        )
+      )
+    )
+    .then(-> onComplete())
+  )
+
+
 Tinytest.addAsync "database - initializeWindowUpdateIndex", (test, onComplete) ->
   beginTest().then((db) ->
     withTx(db, (tx) ->
@@ -723,10 +772,17 @@ Tinytest.addAsync "database - cleanSubscriptions", (test, onComplete) ->
   beginTest()
   .then((db) ->
     withTx(db, (tx) ->
-      db.addSubscriptionForWindow(tx, 'window1', '/', 'lists', [])
+      db.addWindowSubscription(tx, 'window1', '/', 'lists', [])
+    )
+    .then(->
+      withTx(db, (tx) -> db.ensureSubscription(tx, '/', 'lists', []))
     )
     .then(->
       withTx(db, (tx) -> db.cleanSubscriptions(tx))
+    )
+    .then((deletedSubscriptions) ->
+      test.equal deletedSubscriptions, []
+      return
     )
     .then(->
       withTx(db, (tx) -> db.readSubscriptions(tx))
@@ -736,8 +792,9 @@ Tinytest.addAsync "database - cleanSubscriptions", (test, onComplete) ->
         connection: '/'
         name: 'lists'
         args: []
-        readyFromServer: false
-        ready: false
+        serverReady: false
+        status: 'subscribing'
+        loaded: false
       }]
     )
     .then(->
@@ -747,6 +804,12 @@ Tinytest.addAsync "database - cleanSubscriptions", (test, onComplete) ->
     )
     .then(->
       withTx(db, (tx) -> db.cleanSubscriptions(tx))
+    )
+    .then((deletedSubscriptions) ->
+      test.equal deletedSubscriptions, [
+        {connection: '/', name: 'lists', args: []}
+      ]
+      return
     )
     .then(->
       withTx(db, (tx) -> db.readSubscriptions(tx))

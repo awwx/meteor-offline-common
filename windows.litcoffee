@@ -1,4 +1,5 @@
-    @Offline or= {}
+    return unless Offline.supported
+
     {Fanout, Result} = awwx
     broadcast = Offline._broadcast
     {defer} = awwx.Error

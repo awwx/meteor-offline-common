@@ -1,5 +1,5 @@
     DATABASE_NAME = 'awwx/offline-data'
-    DATABASE_VERSION = '5'
+    DATABASE_VERSION = '8'
 
 
 The global environment is `window` in a regular web page, but `self`
@@ -9,7 +9,7 @@ in a shared web worker.
 
 
     {contains, Result} = awwx
-    {getContext, getResponsible, withContext} = awwx.Context
+    {getContext, withContext} = awwx.Context
     {bind, reportError} = awwx.Error
 
 
@@ -230,8 +230,10 @@ TODO do any browsers pay attention to the size argument?
               CREATE TABLE subscriptions (
                 connection TEXT NOT NULL,
                 subscription TEXT NOT NULL,
-                readyFromServer INTEGER NOT NULL,
-                ready INTEGER NOT NULL,
+                serverReady INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT NOT NULL,
+                loaded INTEGER NOT NULL,
                 PRIMARY KEY (connection, subscription)
               )
             """)
@@ -287,13 +289,14 @@ TODO do any browsers pay attention to the size argument?
 
       ensureWindow: (tx, windowId) ->
         begin "ensureWindow",
-          (=>
+          (=> @highestUpdateId(tx)),
+          ((updateId) =>
             @sql(tx,
               """
                 INSERT OR IGNORE INTO windows (windowId, updateId)
-                  VALUES (?, 0)
+                  VALUES (?, ?)
               """,
-              [windowId]
+              [windowId, updateId]
             )
           )
 
@@ -592,11 +595,43 @@ Read all queued methods across all connections.
             subscription = canonicalStringify({name, args})
             @sql(tx,
               """
-                INSERT INTO windowSubscriptions
+                INSERT OR IGNORE INTO windowSubscriptions
                   (windowId, connection, subscription)
                   VALUES (?, ?, ?)
               """,
               [windowId, connection, subscription]
+            )
+          )
+
+
+      setWindowSubscriptions: (tx, windowId, connection, subscriptions) ->
+        begin "setWindowSubscriptions",
+          (=>
+            @sql(tx,
+              """
+                DELETE FROM windowSubscriptions
+                  WHERE windowId = ? AND connection = ?
+              """,
+              [windowId, connection]
+            )
+          ),
+          (=>
+            Result.map(
+              subscriptions,
+              ((subscription) =>
+                serialized = canonicalStringify({
+                  name: subscription[0]
+                  args: subscription[1..]
+                })
+                @sql(tx,
+                  """
+                    INSERT INTO windowSubscriptions
+                      (windowId, connection, subscription)
+                      VALUES (?, ?, ?)
+                  """,
+                  [windowId, connection, serialized]
+                )
+              )
             )
           )
 
@@ -668,10 +703,24 @@ Read all queued methods across all connections.
             @sql(tx,
               """
                 INSERT OR IGNORE INTO subscriptions
-                  (connection, subscription, readyFromServer, ready)
-                  VALUES (?, ?, 0, 0)
+                  (connection, subscription, serverReady, loaded, status, error)
+                  VALUES (?, ?, 0, 0, 'subscribing', '')
               """,
               [connection, subscription]
+            )
+          )
+
+
+      initializeSubscriptions: (tx) ->
+        begin "initializeSubscriptions",
+          (=>
+            @sql(tx,
+              """
+                UPDATE subscriptions
+                  SET serverReady = 0,
+                      status = 'unsubscribed',
+                      error = ''
+              """
             )
           )
 
@@ -688,22 +737,6 @@ Read all queued methods across all connections.
               """,
               [connection, subscription]
             )
-          )
-
-
-      addSubscriptionForWindow: (tx, windowId, connection, name, args) ->
-        begin "addSubscriptionForWindow",
-          (=>
-            Result.join([
-              @addWindowSubscription(
-                tx,
-                windowId,
-                connection,
-                name,
-                args
-              )
-              @ensureSubscription(tx, connection, name, args)
-            ])
           )
 
 
@@ -724,29 +757,56 @@ Read all queued methods across all connections.
             writes = []
             for {connection, name, args} in toDelete
               writes.push @removeSubscription tx, connection, name, args
-            return Result.join(writes)
+            Result.join(writes)
+            .then(=> toDelete)
           )
 
+
+      _loadSubscription: (row) ->
+        {name, args} = EJSON.parse(row.subscription)
+        o = {
+          connection: row.connection
+          name
+          args
+          serverReady: row.serverReady is 1
+          status: row.status
+          loaded: row.loaded is 1
+        }
+        o.error = EJSON.parse(row.error) if row.error isnt ''
+        return o
+
+
+      readSubscription: (tx, connection, name, args) ->
+        begin "readSubscription",
+          (=>
+            subscription = canonicalStringify({name, args})
+            @sql(tx,
+              """
+                SELECT connection, subscription, serverReady, status,
+                       error, loaded
+                  FROM subscriptions
+                  WHERE connection=? AND subscription=?
+              """,
+              [connection, subscription]
+            )
+          ),
+          ((rows) =>
+            if rows.length is 0
+              null
+            else
+              @_loadSubscription(rows[0])
+          )
 
       readSubscriptions: (tx) ->
         begin "readSubscriptions",
           (=> @sql(tx, """
-            SELECT connection, subscription, readyFromServer, ready
+            SELECT connection, subscription, serverReady, status,
+                   error, loaded
               FROM subscriptions
               ORDER BY connection, subscription
           """)),
-          ((rows) ->
-            output = []
-            for row in rows
-              {name, args} = EJSON.parse(row.subscription)
-              output.push {
-                connection: row.connection,
-                name: name,
-                args: args,
-                readyFromServer: row.readyFromServer is 1,
-                ready: row.ready is 1
-              }
-            return output
+          ((rows) =>
+            _.map(rows, @_loadSubscription)
           )
 
 
@@ -768,17 +828,32 @@ Read all queued methods across all connections.
           )
 
 
-      setSubscriptionReadyFromServer: (tx, connection, name, args) ->
-        begin "setSubscriptionReadyFromServer",
+      setSubscriptionServerReady: (tx, connection, name, args) ->
+        begin "setSubscriptionServerReady",
           (=>
             subscription = canonicalStringify({name, args})
             @sql(tx,
               """
-                UPDATE subscriptions SET readyFromServer=1
+                UPDATE subscriptions SET serverReady = 1
                   WHERE connection=? AND
                         subscription=?
               """,
               [connection, subscription]
+            )
+          )
+
+
+      setSubscriptionStatus: (tx, connection, name, args, status) ->
+        begin "setSubscriptionStatus",
+          (=>
+            subscription = canonicalStringify({name, args})
+            @sql(tx,
+              """
+                UPDATE subscriptions SET status=?
+                  WHERE connection=? AND
+                        subscription=?
+              """,
+              [status, connection, subscription]
             )
           )
 
@@ -789,7 +864,37 @@ Read all queued methods across all connections.
             subscription = canonicalStringify({name, args})
             @sql(tx,
               """
-                UPDATE subscriptions SET ready=1
+                UPDATE subscriptions SET status = 'ready', loaded = 1
+                  WHERE connection = ? AND subscription = ?
+              """,
+              [connection, subscription]
+            )
+          )
+
+
+      setSubscriptionError: (tx, connection, name, args, error) ->
+        begin "setSubscriptionError",
+          (=>
+            subscription = canonicalStringify({name, args})
+            @sql(tx,
+              """
+                UPDATE subscriptions
+                  SET serverReady = 0, status = 'error', error = ?, loaded = 0
+                  WHERE connection = ? AND
+                        subscription = ?
+              """,
+              [EJSON.stringify(error), connection, subscription]
+            )
+          )
+
+
+      setSubscriptionLoaded: (tx, connection, name, args) ->
+        begin "setSubscriptionLoaded",
+          (=>
+            subscription = canonicalStringify({name, args})
+            @sql(tx,
+              """
+                UPDATE subscriptions SET loaded = 1
                   WHERE connection=? AND
                         subscription=?
               """,
@@ -887,7 +992,7 @@ Read all queued methods across all connections.
           )
 
 
-      _parseUpdates: (rows) ->
+      _loadUpdates: (rows) ->
         output = []
         for row in rows
           output.push {id: row.id, update: EJSON.parse(row.theUpdate)}
@@ -900,7 +1005,7 @@ Read all queued methods across all connections.
              SELECT id, theUpdate FROM updates ORDER BY id
           """)),
           ((rows) =>
-            return @_parseUpdates(rows)
+            return @_loadUpdates(rows)
           )
 
 
@@ -978,7 +1083,7 @@ Read all queued methods across all connections.
             )
           ),
           ((rows) =>
-            updates = (update.update for update in @_parseUpdates(rows))
+            updates = (update.update for update in @_loadUpdates(rows))
             @initializeWindowUpdateIndex(tx, windowId)
           ),
           (=>
@@ -1003,6 +1108,6 @@ Read all queued methods across all connections.
       Offline.supported = false
 
     Meteor.startup ->
-      return if Offline._disableStartupForTesting
+      return if Offline._disableStartupForTesting or not Offline.supported
       store.open()
       return

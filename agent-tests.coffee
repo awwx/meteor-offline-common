@@ -1,19 +1,19 @@
 {beginTest, withTx} = Offline._test
 
 
-Tinytest.addAsync "offline data - updateSubscriptionsReadyInTx", (test, onComplete) ->
+Tinytest.addAsync "offline data - updateSubscriptionsReady", (test, onComplete) ->
   beginTest()
   .then((db) ->
     withTx(db, (tx) ->
       db.ensureSubscription(tx, '/', 'lists', [])
       .then(->
-        db.setSubscriptionReadyFromServer(tx, '/', 'lists', [])
+        db.setSubscriptionServerReady(tx, '/', 'lists', [])
       )
       .then(->
         db.ensureSubscription(tx, '/', 'tasks', [])
       )
       .then(->
-        db.setSubscriptionReadyFromServer(tx, '/', 'tasks', [])
+        db.setSubscriptionServerReady(tx, '/', 'tasks', [])
       )
       .then(->
         db.addSubscriptionWaitingOnMethods(tx, '/', 'tasks', [], ['abc'])
@@ -21,7 +21,7 @@ Tinytest.addAsync "offline data - updateSubscriptionsReadyInTx", (test, onComple
     )
     .then(->
       withTx(db, (tx) ->
-        Offline._test.updateSubscriptionsReadyInTx(tx)
+        Offline._test.updateSubscriptionsReady(tx, null)
       )
     )
     .then(->
@@ -33,15 +33,17 @@ Tinytest.addAsync "offline data - updateSubscriptionsReadyInTx", (test, onComple
               connection: '/'
               name: 'lists'
               args: []
-              readyFromServer: true
-              ready: true
+              serverReady: true
+              status: 'ready'
+              loaded: true
             }
             {
               connection: '/'
               name: 'tasks'
               args: []
-              readyFromServer: true
-              ready: false
+              serverReady: true
+              status: 'subscribing'
+              loaded: false
             }
           ]
         )
@@ -52,8 +54,12 @@ Tinytest.addAsync "offline data - updateSubscriptionsReadyInTx", (test, onComple
         ((tx) -> db._testReadUpdates(tx)),
         ((updates) ->
           test.equal updates[0].update, {
-            update: 'subscriptionReady'
+            update: 'subscriptionStatus'
             subscription: {connection: '/', name: 'lists', args: []}
+            status: {
+              status: 'ready'
+              loaded: true
+            }
           }
         )
       )
