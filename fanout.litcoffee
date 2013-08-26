@@ -16,9 +16,6 @@ callbacks with the function arguments.
 `fn('abc', 123)`
 
 
-    {catcherr} = awwx.Error
-
-
     Fanout = ->
 
       listeners = []
@@ -26,7 +23,7 @@ callbacks with the function arguments.
       fn = (args...) ->
         if listeners?
           for callback in listeners
-            catcherr -> callback(args...)
+            Errors.catcherr -> callback(args...)
         return
 
       fn.listen = (callback) ->
@@ -39,5 +36,3 @@ callbacks with the function arguments.
         return
 
       return fn
-
-    (@awwx or= {}).Fanout = Fanout

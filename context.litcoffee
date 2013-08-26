@@ -1,9 +1,9 @@
-    class Context
+    class ContextEntry
 
       constructor: (@entry, @parentContext) ->
 
       add: (entry) ->
-        return new Context(entry, this)
+        return new ContextEntry(entry, this)
 
       toArray: ->
         array = []
@@ -30,7 +30,7 @@
     withContext = (entry, fn) ->
       if typeof fn isnt 'function'
         throw new Error "withContext: fn arg is not a function: #{fn}"
-      context = new Context(entry, contextVar.get())
+      context = new ContextEntry(entry, contextVar.get())
       return contextVar.withValue(context, fn)
 
 
@@ -38,7 +38,7 @@
       contextVar.withValue(null, fn)
 
 
-    (@awwx or= {}).Context = {
+    Context = {
       getContext
       resetContext
       withContext

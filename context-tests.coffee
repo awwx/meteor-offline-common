@@ -1,4 +1,4 @@
-{getContext, resetContext, withContext} = awwx.Context
+{getContext, resetContext, withContext} = Context
 
 
 Tinytest.add "context - synchronous", (test) ->

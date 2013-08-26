@@ -3,5 +3,3 @@
         if EJSON.equals(item, value)
           return true
       return false
-
-    (@awwx or= {}).contains = contains

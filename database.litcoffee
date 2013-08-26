@@ -8,11 +8,6 @@ in a shared web worker.
     global = this
 
 
-    {contains, Result} = awwx
-    {getContext, withContext} = awwx.Context
-    {bind, reportError} = awwx.Error
-
-
     sqlRows = (sqlResultSet) ->
       array = []
       r = sqlResultSet.rows
@@ -37,12 +32,12 @@ in a shared web worker.
 
 
     begin = (description, steps...) ->
-      withContext description, =>
+      Context.withContext description, =>
         andthen(Result.completed(), steps...)
 
 
     # begin = (description, steps...) ->
-    #   withContext description, ->
+    #   Context.withContext description, ->
     #     Result.sequence(null, steps)
 
 
@@ -63,14 +58,14 @@ in a shared web worker.
         inTxResult = new Result()
 
         runtx(
-          bind((tx) =>
-            withContext('SQL transaction', => fn(tx))
+          Errors.bind((tx) =>
+            Context.withContext('SQL transaction', => fn(tx))
             .into(inTxResult)
             return
           ),
           # TODO more bind, report error
           ((error) =>
-            reportError(error)
+            Errors.reportError(error)
             txDone.fail()
             return
           ),
@@ -109,23 +104,23 @@ in a shared web worker.
 TODO do any browsers pay attention to the size argument?
 
       openDatabase: (options = {}) ->
-        withContext 'open SQL database', =>
+        Context.withContext 'open SQL database', =>
           @sqldb = global.openDatabase(DATABASE_NAME, '', '', 1024 * 1024)
           return
 
 
       sql: (tx, sqlStatement, args) ->
-        withContext "execute SQL statement: #{sqlStatement}", =>
+        Context.withContext "execute SQL statement: #{sqlStatement}", =>
           result = new Result()
           tx.executeSql(
             sqlStatement,
             args,
-            bind((tx, sqlResultSet) ->
+            Errors.bind((tx, sqlResultSet) ->
               result.complete(sqlRows(sqlResultSet))
               return
             ),
-            bind((tx, sqlError) ->
-              reportError sqlError
+            Errors.bind((tx, sqlError) ->
+              Errors.reportError sqlError
               result.fail()
               return
             )
@@ -355,7 +350,7 @@ TODO do any browsers pay attention to the size argument?
             else if rows.length is 1
               return rows[0].windowId
             else
-              reportError(
+              Errors.reportError(
                 'agentWindow table does not contain a singleton row'
               )
               return Result.failed()
@@ -537,7 +532,7 @@ They are removed once they have been acknowledged by the server.
       ) ->
         begin "addQueuedMethod",
           (=>
-            method = canonicalStringify({name, args})
+            method = stringify({name, args})
             @sql(tx,
               """
                 INSERT INTO queuedMethods
@@ -592,7 +587,7 @@ Read all queued methods across all connections.
       ) ->
         begin "addWindowSubscription",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 INSERT OR IGNORE INTO windowSubscriptions
@@ -619,7 +614,7 @@ Read all queued methods across all connections.
             Result.map(
               subscriptions,
               ((subscription) =>
-                serialized = canonicalStringify({
+                serialized = stringify({
                   name: subscription[0]
                   args: subscription[1..]
                 })
@@ -686,7 +681,7 @@ Read all queued methods across all connections.
       ) ->
         begin "removeWindowSubscription",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx, """
               DELETE FROM windowSubscriptions
                 WHERE windowId=? AND
@@ -699,7 +694,7 @@ Read all queued methods across all connections.
       ensureSubscription: (tx, connection, name, args) ->
         begin "ensureSubscription",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 INSERT OR IGNORE INTO subscriptions
@@ -728,7 +723,7 @@ Read all queued methods across all connections.
       removeSubscription: (tx, connection, name, args) ->
         begin "removeSubscription",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 DELETE FROM subscriptions
@@ -779,7 +774,7 @@ Read all queued methods across all connections.
       readSubscription: (tx, connection, name, args) ->
         begin "readSubscription",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 SELECT connection, subscription, serverReady, status,
@@ -813,7 +808,7 @@ Read all queued methods across all connections.
       haveSubscription: (tx, connection, name, args) ->
         begin "haveSubscription",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 SELECT 1 FROM subscriptions
@@ -831,7 +826,7 @@ Read all queued methods across all connections.
       setSubscriptionServerReady: (tx, connection, name, args) ->
         begin "setSubscriptionServerReady",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 UPDATE subscriptions SET serverReady = 1
@@ -846,7 +841,7 @@ Read all queued methods across all connections.
       setSubscriptionStatus: (tx, connection, name, args, status) ->
         begin "setSubscriptionStatus",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 UPDATE subscriptions SET status=?
@@ -861,7 +856,7 @@ Read all queued methods across all connections.
       setSubscriptionReady: (tx, connection, name, args) ->
         begin "setSubscriptionReady",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 UPDATE subscriptions SET status = 'ready', loaded = 1
@@ -875,7 +870,7 @@ Read all queued methods across all connections.
       setSubscriptionError: (tx, connection, name, args, error) ->
         begin "setSubscriptionError",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 UPDATE subscriptions
@@ -891,7 +886,7 @@ Read all queued methods across all connections.
       setSubscriptionLoaded: (tx, connection, name, args) ->
         begin "setSubscriptionLoaded",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             @sql(tx,
               """
                 UPDATE subscriptions SET loaded = 1
@@ -949,7 +944,7 @@ Read all queued methods across all connections.
       ) ->
         begin "addSubscriptionWaitingOnMethods",
           (=>
-            subscription = canonicalStringify({name, args})
+            subscription = stringify({name, args})
             # TODO Result.map
             writes = []
             for methodId in methodIds
@@ -1090,8 +1085,6 @@ Read all queued methods across all connections.
             return updates
           )
 
-
-    @Offline or= {}
 
     store = null
 

@@ -1,7 +1,3 @@
-    {Fanout} = awwx
-    {bind, catcherr, defer, reportError} = awwx.Error
-
-
     class Result
 
       constructor: ->
@@ -13,9 +9,9 @@
         unless typeof cb is 'function'
           throw new Error("Result.on: callback is not a function: #{cb}")
         if @_done
-          catcherr => cb(@_failed, @_value, this)
+          Errors.catcherr => cb(@_failed, @_value, this)
         else
-          @_doneFanout.listen(bind(cb))
+          @_doneFanout.listen(Errors.bind(cb))
         return this
 
       onSuccess: (cb) ->
@@ -23,7 +19,7 @@
           throw new Error "Result.onSuccess: callback is not a function: #{cb}"
         @callback (failed, value) =>
           return if failed
-          catcherr => cb(value, this)
+          Errors.catcherr => cb(value, this)
           return
         return this
 
@@ -32,7 +28,7 @@
           throw new Error "Result.onFail: callback is not a function: #{cb}"
         @callback (failed, value) =>
           return unless failed
-          catcherr => cb(failed, this)
+          Errors.catcherr => cb(failed, this)
           return
         return this
 
@@ -74,7 +70,7 @@
         try
           ret = fn(arg)
         catch error
-          reportError error
+          Errors.reportError error
           @fail()
           return
         if ret instanceof Result
@@ -139,7 +135,7 @@ TODO clear timeout if result finishes before the timeout
 
       @defer: (v) ->
         result = new Result()
-        defer(-> result.complete(v))
+        Errors.defer(-> result.complete(v))
         return result
 
       @join: (results) ->
@@ -210,5 +206,3 @@ TODO clear timeout if result finishes before the timeout
             Meteor._debug msg, 'completed', value
           return
         return this
-
-    (@awwx or= {}).Result = Result

@@ -1,48 +1,44 @@
     return unless Offline.supported
 
-    {contains, Result} = awwx
-    {withContext} = awwx.Context
-    broadcast = Offline._broadcast
-    {defer} = awwx.Error
     database = Offline._database
 
     Offline._test or= {}
 
 
-    unless @Agent?
+    unless Offline.isWebWorker
       {nowAgent, thisWindowId} = Offline._windows
     {windowsAreDead} = Offline._windows
 
 
     Offline._messageAgent = (topic, args...) ->
-      if @Agent?
+      if Offline.isWebWorker
         throw new Error("oops, messaging agent from agent");
       else if Offline._usingSharedWebWorker
         Offline._sharedWebWorker.post {msg: topic, args}
       else if Offline._windows.currentlyTheAgent()
-        defer -> handlers[topic]?(args...)
+        Errors.defer -> handlers[topic]?(args...)
       else
         broadcast topic, args...
       return
 
 
-    if @Agent?
+    if Offline.isWebWorker
 
-      Agent.addMessageHandler 'update', (sourcePort, data) ->
-        for port in Agent.ports
+      WebWorker.addMessageHandler 'update', (sourcePort, data) ->
+        for port in WebWorker.ports
           unless port is sourcePort
             port.postMessage({msg: 'update'})
         return
 
 
       addMessageHandler = (topic, callback) ->
-        Agent.addMessageHandler topic, (sourcePort, data) ->
+        WebWorker.addMessageHandler topic, (sourcePort, data) ->
           callback()
           return
 
 
       broadcastUpdate = ->
-        for port in Agent.ports
+        for port in WebWorker.ports
           port.postMessage({msg: 'update'})
         return
 
@@ -99,7 +95,7 @@ A subscription becomes loaded when it is ready, and stays loaded until
 the subscription is unsubscribed or has an error.
 
     updateSubscriptionsReady = (tx, trackUpdate) ->
-      withContext "updateSubscriptionsReady", ->
+      Context.withContext "updateSubscriptionsReady", ->
         Result.join([
           database.readSubscriptions(tx)
           database.readSubscriptionsHeldUp(tx)
@@ -138,7 +134,7 @@ TODO because we're no longer passing the agent role from window to
 window, once this window becomes the agent it stays the agent for as
 long as it's alive.
 
-    if @Agent?
+    if Offline.isWebWorker
 
       asAgentWindow = (fn) ->
         database.transaction(fn)
@@ -212,7 +208,7 @@ we've already seen.
 
 
       _alreadyHaveMeteorSubscription: (subscription) ->
-        !! @meteorSubscriptionHandles[canonicalStringify(subscription)]
+        !! @meteorSubscriptionHandles[stringify(subscription)]
 
 
       allMeteorSubscriptionsReady: ->
@@ -291,7 +287,7 @@ we've already seen.
       stopOldSubscriptions: (tx, trackUpdate, subscriptions) ->
         writes = []
         for subscription in @oldSubscriptions(subscriptions)
-          serialized = canonicalStringify(subscription)
+          serialized = stringify(subscription)
           @meteorSubscriptionHandles[serialized].stop()
           delete @meteorSubscriptionHandles[serialized]
           trackUpdate.madeUpdate = true
@@ -347,7 +343,7 @@ we've already seen.
           onReady: =>
             @meteorSubscriptionReady(subscription)
             return
-        @meteorSubscriptionHandles[canonicalStringify(subscription)] = handle
+        @meteorSubscriptionHandles[stringify(subscription)] = handle
         return
 
 
@@ -700,7 +696,7 @@ TODO can we batch updates into one transaction?
 
     Meteor.startup ->
 
-      return if not @Agent? and Offline._usingSharedWebWorker
+      return if Offline.isWebWorker and Offline._usingSharedWebWorker
 
       addMessageHandler 'windowSubscriptionsUpdated', ->
         windowSubscriptionsUpdated()
@@ -710,7 +706,7 @@ TODO can we batch updates into one transaction?
         sendQueuedMethods()
         return
 
-      if @Agent?
+      if Offline.isWebWorker
         initializeAgent()
       else
         nowAgent.listen initializeAgent

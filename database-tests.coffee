@@ -1,9 +1,8 @@
-Result = awwx.Result
 {beginTest, withTx} = Offline._test
-Context = awwx.Context
-{contains} = awwx
+
 
 newDB = -> new Offline._SQLStore()
+
 
 expectedTables = [
   'agentWindow'

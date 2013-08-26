@@ -7,15 +7,15 @@
 
   "author": "Andrew Wilcox",
 
-  "version": "0.1.0",
+  "version": "0.1.1rc1",
 
   "git": "https://github.com/awwx/meteor-offline-common.git",
 
   "packages": {
-    "browser-msg": "0.0.2",
+    "browser-msg": "1.1.0",
     "canonical-stringify": {
       "git": "https://github.com/awwx/meteor-canonical-stringify.git",
-      "tag": "v1.1"
+      "tag": "v1.2"
     }
   }
 }

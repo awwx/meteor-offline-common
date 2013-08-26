@@ -1,6 +1,3 @@
-    {getContext} = awwx.Context
-
-
     ensureString = (x) ->
       if x is null
         return 'null'
@@ -11,7 +8,7 @@
       try
         return x.toString()
       catch error
-        return JSON.stringify(describeError(error))
+        return EJSON.stringify(describeError(error))
 
 
 Return a plain Javascript object, guaranteed to be JSON
@@ -83,7 +80,7 @@ by newlines).
 
 
     reportError = (error) ->
-      logError(describeError(error, getContext()))
+      logError(describeError(error, Context.getContext()))
       return
 
 
@@ -109,7 +106,7 @@ by newlines).
       Meteor.bindEnvironment(fn, reportError, this)
 
 
-    _.extend ((@awwx or= {}).Error or= {}), {
+    Errors = {
       bind
       catcherr
       defer

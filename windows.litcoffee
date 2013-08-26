@@ -1,9 +1,5 @@
     return unless Offline.supported
 
-    {Fanout, Result} = awwx
-    broadcast = Offline._broadcast
-    {defer} = awwx.Error
-    {withContext} = awwx.Context
     db = Offline._database
 
 
@@ -16,7 +12,7 @@
 
 ## Running in a shared web worker
 
-    if Agent?
+    if Offline.isWebWorker
 
 TODO once we get going we don't need to report that no windows are
 dead (we could call `windowsAreDead` only when the `windowIds` array
@@ -25,7 +21,7 @@ it's safe to clear out old subscriptions?  For now always call
 `windowsAreDead`, even with an empty array.
 
       deadWindows = (windowIds) ->
-        Agent.windowIsDead(windowId) for windowId in windowIds
+        WebWorker.windowIsDead(windowId) for windowId in windowIds
         windowsAreDead(windowIds)
         return
 
@@ -35,12 +31,12 @@ it's safe to clear out old subscriptions?  For now always call
       testingWindows = {}
 
 
-      Agent.addMessageHandler 'goodbye', (port, data) ->
+      WebWorker.addMessageHandler 'goodbye', (port, data) ->
         deadWindows([data.windowId])
         return
 
 
-      Agent.addMessageHandler 'pong', (port, data) ->
+      WebWorker.addMessageHandler 'pong', (port, data) ->
         delete testingWindows?[data.windowId]
         return
 
@@ -52,7 +48,7 @@ it's safe to clear out old subscriptions?  For now always call
 
 
       check = ->
-        withContext "window check", ->
+        Context.withContext "window check", ->
           return if checking or lastPing? and now() - lastPing < 9000
           checking = true
 
@@ -61,10 +57,10 @@ it's safe to clear out old subscriptions?  For now always call
           )
           .then((windowIds) ->
             testingWindows = {}
-            testingWindows[windowId] = true for windowId in Agent.windowIds
+            testingWindows[windowId] = true for windowId in WebWorker.windowIds
             testingWindows[windowId] = true for windowId in windowIds
             lastPing = now()
-            for port in Agent.ports
+            for port in WebWorker.ports
               port.postMessage({msg: 'ping'})
             Meteor.setTimeout checkPongs, 4000
             return
@@ -93,7 +89,7 @@ it's safe to clear out old subscriptions?  For now always call
 
 
       deadWindows = (deadWindowIds) ->
-        withContext "deadWindows", ->
+        Context.withContext "deadWindows", ->
           db.transaction((tx) ->
             db.readAgentWindow(tx)
             .then((agentWindowId) ->
@@ -114,9 +110,9 @@ it's safe to clear out old subscriptions?  For now always call
 
 
       becomeTheAgentWindow = (tx) ->
-        withContext "becomeTheAgentWindow", ->
+        Context.withContext "becomeTheAgentWindow", ->
           currentlyTheAgent = true
-          defer -> nowAgent()
+          Errors.defer -> nowAgent()
           db.writeAgentWindow(tx, thisWindowId)
 
 
@@ -125,7 +121,7 @@ agent window is marked as closed in local storage, we can become the
 agent window right away.
 
       startupCheck = ->
-        withContext "startupCheck", ->
+        Context.withContext "startupCheck", ->
           db.transaction((tx) ->
             db.readAgentWindow(tx)
             .then((agentWindowId) ->
@@ -148,7 +144,7 @@ agent window right away.
 
 
       check = ->
-        withContext "window check", ->
+        Context.withContext "window check", ->
           return if checking
           checking = true
           db.transaction((tx) ->
@@ -174,7 +170,7 @@ agent window right away.
 
 
       Meteor.startup ->
-        withContext "windows startup", ->
+        Context.withContext "windows startup", ->
 
           return if Offline._disableStartupForTesting
 
@@ -187,12 +183,12 @@ agent window right away.
           else
 
             broadcast.listen 'ping', ->
-              withContext "listen ping", ->
+              Context.withContext "listen ping", ->
                 broadcast 'pong', thisWindowId
                 return
 
             broadcast.listen 'pong', (windowId) ->
-              withContext "listen pong", ->
+              Context.withContext "listen pong", ->
                 if testingWindows?
                   delete testingWindows[windowId]
                 return
@@ -218,7 +214,7 @@ long enough to write anything to the database (it gets no more ticks
 of the event loop).  But we are able to write to local storage.
 
       unload = ->
-        withContext "unload", ->
+        Context.withContext "unload", ->
           if Offline._usingSharedWebWorker
             Offline._sharedWebWorker.post {
               msg: 'goodbye',

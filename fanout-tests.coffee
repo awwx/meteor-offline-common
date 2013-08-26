@@ -1,5 +1,3 @@
-Fanout = awwx.Fanout
-
 Tinytest.add 'fanout - call', (test) ->
   fanout = new Fanout()
 

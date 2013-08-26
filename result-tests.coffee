@@ -1,5 +1,4 @@
-Result = awwx.Result
-{getContext, resetContext, withContext} = awwx.Context
+{getContext, resetContext, withContext} = Context
 
 
 Tinytest.addAsync 'result - complete', (test, onComplete) ->
