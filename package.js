@@ -41,6 +41,7 @@ Package.on_use(function (api) {
     [
       'database.litcoffee',
       'windows.litcoffee',
+      'model.litcoffee',
       'agent.litcoffee'
     ],
     'client'

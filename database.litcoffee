@@ -1,3 +1,6 @@
+    return unless Offline.supported
+
+
     DATABASE_NAME = 'awwx/offline-data'
     DATABASE_VERSION = '8'
 
@@ -1086,19 +1089,13 @@ Read all queued methods across all connections.
           )
 
 
-    store = null
-
-    if global.openDatabase
-      Offline.supported = true
-      store = new SQLStore()
-      Offline._SQLStore = SQLStore
-      Offline._database = store
-      Offline._databaseName = DATABASE_NAME
-      Offline._databaseVersion = DATABASE_VERSION
-      Offline.resetDatabase = ->
-        store.resetDatabase()
-    else
-      Offline.supported = false
+    store = new SQLStore()
+    Offline._SQLStore = SQLStore
+    Offline._database = store
+    Offline._databaseName = DATABASE_NAME
+    Offline._databaseVersion = DATABASE_VERSION
+    Offline.resetDatabase = ->
+      store.resetDatabase()
 
     Meteor.startup ->
       return if Offline._disableStartupForTesting or not Offline.supported

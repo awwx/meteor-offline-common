@@ -64,11 +64,6 @@
 
 
     broadcastStatusOfSubscription = (tx, trackUpdate, subscription) ->
-      status = {
-        status: subscription.status
-        loaded: subscription.loaded
-      }
-      status.error = subscription.error if subscription.error?
       addUpdate tx, trackUpdate, {
         update: 'subscriptionStatus'
         subscription: {
@@ -76,7 +71,7 @@
           name: subscription.name
           args: subscription.args
         }
-        status
+        status: Offline._subscriptionStatus(subscription)
       }
 
 
@@ -696,7 +691,7 @@ TODO can we batch updates into one transaction?
 
     Meteor.startup ->
 
-      return if Offline.isWebWorker and Offline._usingSharedWebWorker
+      return if not Offline.isWebWorker and Offline._usingSharedWebWorker
 
       addMessageHandler 'windowSubscriptionsUpdated', ->
         windowSubscriptionsUpdated()
