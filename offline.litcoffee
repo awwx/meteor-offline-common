@@ -20,11 +20,13 @@ On the client, offline data is supported if
 
     if Offline.isWebWorker
 
-      Offline.supported = true
+      Offline.persistent = true
+
 
     else if Meteor.isClient
 
-      Offline.supported =
+      Offline.persistent =
+        (not Meteor.settings?.public?.offlineData?.disable) and
         openDatabase? and
         ((not Meteor.settings?.public?.offlineData?.disableWorker and
           SharedWorker?) or
@@ -32,4 +34,4 @@ On the client, offline data is supported if
 
     else if Meteor.isServer
 
-      Offline.supported = true
+      Offline.persistent = true

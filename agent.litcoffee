@@ -1,4 +1,4 @@
-    return unless Offline.supported
+    return unless Offline.persistent
 
     database = Offline._database
 

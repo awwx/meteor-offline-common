@@ -1,4 +1,4 @@
-    return unless Offline.supported
+    return unless Offline.persistent
 
 
     DATABASE_NAME = 'awwx/offline-data'
@@ -1098,6 +1098,6 @@ Read all queued methods across all connections.
       store.resetDatabase()
 
     Meteor.startup ->
-      return if Offline._disableStartupForTesting or not Offline.supported
+      return if Offline._disableStartupForTesting or not Offline.persistent
       store.open()
       return
